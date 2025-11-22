@@ -90,12 +90,12 @@ async function run() {
 
     //? Rider related Apis
     app.get("/riders", async (req, res) => {
-      const query = { status: "pending" };
-      const status = req.query?.status;
-      if (status) {
-        query.status = status;
-      }
-      const result = await riderCollection.find(query).toArray();
+      // const query = { status: "pending" };
+      // const status = req.query?.status;
+      // if (status) {
+      //   query.status = status;
+      // }
+      const result = await riderCollection.find().toArray();
       res.status(200).json(result);
     });
 
@@ -111,6 +111,28 @@ async function run() {
       }
       const result = await riderCollection.insertOne(rider);
       res.status(201).json(result);
+    });
+
+    app.patch("/riders/:id", async (req, res) => {
+      const id = req.params.id;
+      const status = req.body.status;
+      const query = { _id: new ObjectId(id) };
+      const update = { $set: { status: status } };
+      const result = await riderCollection.updateOne(query, update);
+      if (status === "approved") {
+        const email = req.body.email;
+        const userQuery = { email };
+        const updateRole = { $set: { role: "rider" } };
+        await userCollection.updateOne(userQuery, updateRole);
+      }
+      res.json(result);
+    });
+
+    app.delete("/riders/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await riderCollection.deleteOne(query);
+      res.json(result);
     });
 
     //* parcels api
