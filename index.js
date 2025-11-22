@@ -70,8 +70,10 @@ async function run() {
     const parcelsCollection = zapShiftDB.collection("parcels");
     const paymentCollection = zapShiftDB.collection("payments");
     const userCollection = zapShiftDB.collection("users");
+    const riderCollection = zapShiftDB.collection("riders");
 
     //* User related Apis
+
     app.post("/users", async (req, res) => {
       const user = req.body;
       user.role = "user";
@@ -83,6 +85,31 @@ async function run() {
         return res.send({ message: "User already exits" });
       }
       const result = await userCollection.insertOne(user);
+      res.status(201).json(result);
+    });
+
+    //? Rider related Apis
+    app.get("/riders", async (req, res) => {
+      const query = { status: "pending" };
+      const status = req.query?.status;
+      if (status) {
+        query.status = status;
+      }
+      const result = await riderCollection.find(query).toArray();
+      res.status(200).json(result);
+    });
+
+    app.post("/riders", async (req, res) => {
+      const rider = req.body;
+      rider.createdAt = new Date().toISOString();
+      rider.status = "pending";
+      const email = rider.email;
+      const query = { email };
+      const isExitsRider = await riderCollection.findOne(query);
+      if (isExitsRider) {
+        return res.json({ message: "Rider is exits already!" });
+      }
+      const result = await riderCollection.insertOne(rider);
       res.status(201).json(result);
     });
 
