@@ -72,7 +72,49 @@ async function run() {
     const userCollection = zapShiftDB.collection("users");
     const riderCollection = zapShiftDB.collection("riders");
 
+    // middleware for check user is admin or not
+    const verifyAdminRole = async (req, res, next) => {
+      const email = req.decoded_email;
+      const query = { email };
+      const user = await userCollection.findOne(query);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ message: "forbidden access" });
+      }
+      next();
+    };
+
     //* User related Apis
+    app.get("/users", async (req, res) => {
+      const { limit = 0, skip = 0, search } = req.query;
+      const query = {};
+      console.log(search);
+      if (search) {
+        query.$or = [
+          { displayName: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } },
+        ];
+      }
+      const users = await userCollection
+        .find(query)
+        .limit(Number(limit))
+        .skip(Number(skip))
+        .toArray();
+      const total = await userCollection.estimatedDocumentCount();
+      res.json({ users, total });
+    });
+
+    app.get("/users/:id", async (req, res) => {
+      const id = req.params.id;
+      // const result = await userCollection.find().toArray();
+      // res.json(result);
+    });
+
+    app.get("/users/:email/role", verifyFBToken, async (req, res) => {
+      const email = req.params.email;
+      const query = { email };
+      const result = await userCollection.findOne(query);
+      res.json({ role: result?.role } || "user");
+    });
 
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -88,8 +130,23 @@ async function run() {
       res.status(201).json(result);
     });
 
+    app.patch(
+      "/users/:id/role",
+      verifyFBToken,
+      verifyAdminRole,
+      async (req, res) => {
+        const id = req.params.id;
+        const userInfo = req.body;
+
+        const query = { _id: new ObjectId(id) };
+        const updateDoc = { $set: { role: userInfo.role } };
+        const result = await userCollection.updateOne(query, updateDoc);
+        res.json(result);
+      }
+    );
+
     //? Rider related Apis
-    app.get("/riders", async (req, res) => {
+    app.get("/riders", verifyFBToken, verifyAdminRole, async (req, res) => {
       const query = {};
       const status = req.query?.status;
       if (status) {
@@ -113,20 +170,25 @@ async function run() {
       res.status(201).json(result);
     });
 
-    app.patch("/riders/:id", async (req, res) => {
-      const id = req.params.id;
-      const status = req.body.status;
-      const query = { _id: new ObjectId(id) };
-      const update = { $set: { status: status } };
-      const result = await riderCollection.updateOne(query, update);
-      if (status === "approved") {
-        const email = req.body.email;
-        const userQuery = { email };
-        const updateRole = { $set: { role: "rider" } };
-        await userCollection.updateOne(userQuery, updateRole);
+    app.patch(
+      "/riders/:id",
+      verifyFBToken,
+      verifyAdminRole,
+      async (req, res) => {
+        const id = req.params.id;
+        const status = req.body.status;
+        const query = { _id: new ObjectId(id) };
+        const update = { $set: { status: status } };
+        const result = await riderCollection.updateOne(query, update);
+        if (status === "approved") {
+          const email = req.body.email;
+          const userQuery = { email };
+          const updateRole = { $set: { role: "rider" } };
+          await userCollection.updateOne(userQuery, updateRole);
+        }
+        res.json(result);
       }
-      res.json(result);
-    });
+    );
 
     app.delete("/riders/:id", async (req, res) => {
       const id = req.params.id;
