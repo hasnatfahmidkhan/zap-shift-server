@@ -94,12 +94,12 @@ async function run() {
           { email: { $regex: search, $options: "i" } },
         ];
       }
+      const total = await userCollection.countDocuments(query);
       const users = await userCollection
         .find(query)
         .limit(Number(limit))
         .skip(Number(skip))
         .toArray();
-      const total = await userCollection.estimatedDocumentCount();
       res.json({ users, total });
     });
 
@@ -201,10 +201,13 @@ async function run() {
     // get parcels
     app.get("/parcels", async (req, res) => {
       // sort search limit skip
-      const email = req.query.email;
+      const { email, deliveryStatus } = req.query;
       const query = {};
       if (email) {
         query.senderEmail = email;
+      }
+      if (deliveryStatus) {
+        query.deliveryStatus = deliveryStatus;
       }
       const options = { createdAt: -1 };
       const result = await parcelsCollection
@@ -294,6 +297,8 @@ async function run() {
           message: "payment already exits",
           transactionId: session.payment_intent,
           trackingId: isExits.trackingId,
+          amount: session.amount_total / 100,
+          paidAt: new Date().toISOString(),
         });
       }
 
@@ -304,6 +309,7 @@ async function run() {
           $set: {
             paymentStatus: "paid",
             trackingId: trackingId,
+            deliveryStatus: "pending-pickup",
           },
         };
         const result = await parcelsCollection.updateOne(query, update);
@@ -327,7 +333,9 @@ async function run() {
             modifyParcel: result,
             trackingId: trackingId,
             transactionId: session.payment_intent,
+            amount: session.amount_total / 100,
             paymentInfo: paymentResult,
+            paidAt: new Date().toISOString(),
           });
         }
       }
