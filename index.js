@@ -71,6 +71,7 @@ async function run() {
     const paymentCollection = zapShiftDB.collection("payments");
     const userCollection = zapShiftDB.collection("users");
     const riderCollection = zapShiftDB.collection("riders");
+    const trackingCollection = zapShiftDB.collection("trackings");
 
     // middleware for check user is admin or not
     const verifyAdminRole = async (req, res, next) => {
@@ -81,6 +82,18 @@ async function run() {
         return res.status(403).json({ message: "forbidden access" });
       }
       next();
+    };
+
+    // tracking logs func
+    const trackingLog = async (trackingId, status) => {
+      const logInfo = {
+        trackingId,
+        status,
+        details: status.split("-").join(" "),
+        createdAt: new Date().toISOString(),
+      };
+      const result = await trackingCollection.insertOne(logInfo);
+      return result;
     };
 
     //* User related Apis
@@ -148,11 +161,23 @@ async function run() {
     //? Rider related Apis
     app.get("/riders", verifyFBToken, verifyAdminRole, async (req, res) => {
       const query = {};
-      const status = req.query?.status;
+      const { status, workStatus, district } = req.query;
+
       if (status) {
         query.status = status;
       }
-      const result = await riderCollection.find(query).toArray();
+      if (workStatus) {
+        query.workStatus = workStatus;
+      }
+      if (district) {
+        query.riderDistrict = district;
+      }
+      const result = await riderCollection
+        .find(query)
+        .sort({ createdAt: -1 })
+        .toArray();
+
+      console.log(result, query);
       res.status(200).json(result);
     });
 
@@ -178,7 +203,7 @@ async function run() {
         const id = req.params.id;
         const status = req.body.status;
         const query = { _id: new ObjectId(id) };
-        const update = { $set: { status: status } };
+        const update = { $set: { status: status, workStatus: "available" } };
         const result = await riderCollection.updateOne(query, update);
         if (status === "approved") {
           const email = req.body.email;
@@ -217,11 +242,71 @@ async function run() {
       res.status(200).json(result);
     });
 
+    app.get("/parcels/rider", async (req, res) => {
+      const { riderEmail, deliveryStatus } = req.query;
+      const query = {};
+      if (riderEmail) {
+        query.riderEmail = riderEmail;
+      }
+      if (deliveryStatus !== "delivered") {
+        query.deliveryStatus = {
+          $nin: ["delivered"],
+        };
+      } else {
+        query.deliveryStatus = deliveryStatus;
+      }
+      const result = await parcelsCollection.find(query).toArray();
+
+      res.json(result);
+    });
+
     // post parcels
     app.post("/parcels", async (req, res) => {
       const newParcel = req.body;
       const result = await parcelsCollection.insertOne(newParcel);
       res.status(201).json(result);
+    });
+
+    app.patch("/parcels/:id/assign", async (req, res) => {
+      const { trackingId, riderId, riderName, riderEmail } = req.body;
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          deliveryStatus: "rider-assigned",
+          riderId,
+          riderName,
+          riderEmail,
+        },
+      };
+      const result = await parcelsCollection.updateOne(query, updateDoc);
+      trackingLog(trackingId, "rider-assigned");
+      // update rider info
+      const riderQuery = { _id: new ObjectId(riderId) };
+      const riderUpdatedDoc = { $set: { workStatus: "in-delivery" } };
+      const riderResult = await riderCollection.updateOne(
+        riderQuery,
+        riderUpdatedDoc
+      );
+      res.json({ parcelInfo: result, riderInfo: riderResult });
+    });
+
+    app.patch("/parcels/:id/deliveryStatus", async (req, res) => {
+      const { deliveryStatus, email, trackingId } = req.body;
+      const query = { _id: new ObjectId(req.params.id) };
+      const updateDoc = { $set: { deliveryStatus } };
+      if (
+        deliveryStatus === "delivered" ||
+        deliveryStatus === "pending-pickup"
+      ) {
+        await riderCollection.updateOne(
+          { email },
+          { $set: { workStatus: "available" } }
+        );
+      }
+      const result = await parcelsCollection.updateOne(query, updateDoc);
+      trackingLog(trackingId, deliveryStatus);
+      res.json(result);
     });
 
     // delete parcels
@@ -255,7 +340,6 @@ async function run() {
     app.post("/create-checkout-session", async (req, res) => {
       const paymentInfo = req.body;
       const amount = paymentInfo.amount * 100;
-      console.log(paymentInfo);
 
       const session = await stripe.checkout.sessions.create({
         line_items: [
@@ -328,6 +412,7 @@ async function run() {
 
         if (session.payment_status === "paid") {
           const paymentResult = await paymentCollection.insertOne(payment);
+          trackingLog(trackingId, "pending-pickup");
           res.json({
             success: true,
             modifyParcel: result,
@@ -339,6 +424,16 @@ async function run() {
           });
         }
       }
+    });
+
+    // tracking api
+    app.get("/trackings/:id", async (req, res) => {
+      const id = req.params.id;
+
+      const result = await trackingCollection
+        .find({ trackingId: id })
+        .toArray();
+      res.json(result);
     });
 
     await client.db("admin").command({ ping: 1 });
