@@ -110,7 +110,6 @@ async function run() {
     app.get("/users", async (req, res) => {
       const { limit = 0, skip = 0, search } = req.query;
       const query = {};
-      console.log(search);
       if (search) {
         query.$or = [
           { displayName: { $regex: search, $options: "i" } },
@@ -187,8 +186,59 @@ async function run() {
         .sort({ createdAt: -1 })
         .toArray();
 
-      console.log(result, query);
       res.status(200).json(result);
+    });
+
+    app.get("/rider/delivery-per-day", async (req, res) => {
+      const email = req.query.email;
+
+      const pipeline = [
+        { $match: { riderEmail: email } },
+
+        {
+          $lookup: {
+            from: "trackings",
+            localField: "trackingId",
+            foreignField: "trackingId",
+            as: "tracks",
+          },
+        },
+
+        { $unwind: "$tracks" },
+
+        { $match: { "tracks.status": "delivered" } },
+
+        // Convert string -> Date
+        {
+          $addFields: {
+            deliveredAt: { $toDate: "$tracks.createdAt" },
+          },
+        },
+
+        // Group by formatted date
+        {
+          $group: {
+            _id: {
+              date: {
+                $dateToString: { format: "%Y-%m-%d", date: "$deliveredAt" },
+              },
+            },
+            deliveredCount: { $sum: 1 },
+          },
+        },
+        {
+          $project: {
+            date: "$_id.date",
+            deliveredCount: 1,
+            _id: 0,
+          },
+        },
+
+        // { $sort: { "_id.date": 1 } },
+      ];
+
+      const result = await parcelsCollection.aggregate(pipeline).toArray();
+      res.json(result);
     });
 
     app.post("/riders", async (req, res) => {
@@ -272,6 +322,31 @@ async function run() {
         }
         const result = await parcelsCollection.find(query).toArray();
 
+        res.json(result);
+      }
+    );
+
+    app.get(
+      "/parcels/delivery-stats",
+      verifyFBToken,
+      verifyAdminRole,
+      async (req, res) => {
+        const pipeline = [
+          {
+            $group: {
+              _id: "$deliveryStatus",
+              count: { $sum: 1 },
+            },
+          },
+          {
+            $project: {
+              status: "$_id",
+              count: 1,
+              _id: 0,
+            },
+          },
+        ];
+        const result = await parcelsCollection.aggregate(pipeline).toArray();
         res.json(result);
       }
     );
@@ -460,10 +535,10 @@ async function run() {
       res.json(result);
     });
 
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // Ensures that the client will close when you finish/error
   }
