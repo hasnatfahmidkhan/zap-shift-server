@@ -40,7 +40,13 @@ admin.initializeApp({
 
 // Middleware
 app.use(express.json());
-app.use(cors());
+app.use(
+  cors({
+    origin: "*", // allow all domains
+    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 
 const verifyFBToken = async (req, res, next) => {
   const authorization = req.headers.authorization;
