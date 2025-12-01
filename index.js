@@ -60,27 +60,6 @@ const verifyFBToken = async (req, res, next) => {
   next();
 };
 
-// middleware for check user is admin or not
-const verifyAdminRole = async (req, res, next) => {
-  const email = req.decoded_email;
-  const query = { email };
-  const user = await userCollection.findOne(query);
-  if (!user || user.role !== "admin") {
-    return res.status(403).json({ message: "forbidden access" });
-  }
-  next();
-};
-// middleware for check user is rider or not
-const verifyRiderRole = async (req, res, next) => {
-  const email = req.decoded_email;
-  const query = { email };
-  const user = await userCollection.findOne(query);
-  if (!user || user.role !== "rider") {
-    return res.status(403).json({ message: "forbidden access" });
-  }
-  next();
-};
-
 // tracking logs func
 const trackingLog = async (trackingId, status) => {
   const logInfo = {
@@ -111,6 +90,27 @@ async function run() {
     const userCollection = zapShiftDB.collection("users");
     const riderCollection = zapShiftDB.collection("riders");
     const trackingCollection = zapShiftDB.collection("trackings");
+
+    // middleware for check user is admin or not
+    const verifyAdminRole = async (req, res, next) => {
+      const email = req.decoded_email;
+      const query = { email };
+      const user = await userCollection.findOne(query);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ message: "forbidden access" });
+      }
+      next();
+    };
+    // middleware for check user is rider or not
+    const verifyRiderRole = async (req, res, next) => {
+      const email = req.decoded_email;
+      const query = { email };
+      const user = await userCollection.findOne(query);
+      if (!user || user.role !== "rider") {
+        return res.status(403).json({ message: "forbidden access" });
+      }
+      next();
+    };
 
     //* User related Apis
     app.get("/users", async (req, res) => {
