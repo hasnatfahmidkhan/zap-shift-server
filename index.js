@@ -4,7 +4,6 @@ dotenv.config();
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const stripe = require("stripe")(process.env.STRIPE_KEY);
-const { nanoid } = require("nanoid");
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -20,8 +19,12 @@ const generateTrackingId = () => {
   // 2. Random 4-digit number
   const randomNumber = Math.floor(1000 + Math.random() * 9000);
 
-  // 3. Random 4-char nanoid
-  const suffix = nanoid(4).toUpperCase();
+  // 3. Random 6-char secure ID using crypto.randomUUID()
+  const suffix = crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .slice(0, 6)
+    .toUpperCase();
 
   // 4. Final ID
   return `TRK-${dateStr}-${randomNumber}-${suffix}`;
@@ -40,13 +43,7 @@ admin.initializeApp({
 
 // Middleware
 app.use(express.json());
-app.use(
-  cors({
-    origin: "*", // allow all domains
-    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+app.use(cors());
 
 const verifyFBToken = async (req, res, next) => {
   const authorization = req.headers.authorization;
@@ -61,6 +58,39 @@ const verifyFBToken = async (req, res, next) => {
   const decoded = await admin.auth().verifyIdToken(tokenId);
   req.decoded_email = decoded.email;
   next();
+};
+
+// middleware for check user is admin or not
+const verifyAdminRole = async (req, res, next) => {
+  const email = req.decoded_email;
+  const query = { email };
+  const user = await userCollection.findOne(query);
+  if (!user || user.role !== "admin") {
+    return res.status(403).json({ message: "forbidden access" });
+  }
+  next();
+};
+// middleware for check user is rider or not
+const verifyRiderRole = async (req, res, next) => {
+  const email = req.decoded_email;
+  const query = { email };
+  const user = await userCollection.findOne(query);
+  if (!user || user.role !== "rider") {
+    return res.status(403).json({ message: "forbidden access" });
+  }
+  next();
+};
+
+// tracking logs func
+const trackingLog = async (trackingId, status) => {
+  const logInfo = {
+    trackingId,
+    status,
+    details: status.split("-").join(" "),
+    createdAt: new Date().toISOString(),
+  };
+  const result = await trackingCollection.insertOne(logInfo);
+  return result;
 };
 
 const uri = process.env.MONGOURL;
@@ -81,39 +111,6 @@ async function run() {
     const userCollection = zapShiftDB.collection("users");
     const riderCollection = zapShiftDB.collection("riders");
     const trackingCollection = zapShiftDB.collection("trackings");
-
-    // middleware for check user is admin or not
-    const verifyAdminRole = async (req, res, next) => {
-      const email = req.decoded_email;
-      const query = { email };
-      const user = await userCollection.findOne(query);
-      if (!user || user.role !== "admin") {
-        return res.status(403).json({ message: "forbidden access" });
-      }
-      next();
-    };
-    // middleware for check user is rider or not
-    const verifyRiderRole = async (req, res, next) => {
-      const email = req.decoded_email;
-      const query = { email };
-      const user = await userCollection.findOne(query);
-      if (!user || user.role !== "rider") {
-        return res.status(403).json({ message: "forbidden access" });
-      }
-      next();
-    };
-
-    // tracking logs func
-    const trackingLog = async (trackingId, status) => {
-      const logInfo = {
-        trackingId,
-        status,
-        details: status.split("-").join(" "),
-        createdAt: new Date().toISOString(),
-      };
-      const result = await trackingCollection.insertOne(logInfo);
-      return result;
-    };
 
     //* User related Apis
     app.get("/users", async (req, res) => {
