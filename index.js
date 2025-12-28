@@ -60,18 +60,6 @@ const verifyFBToken = async (req, res, next) => {
   next();
 };
 
-// tracking logs func
-const trackingLog = async (trackingId, status) => {
-  const logInfo = {
-    trackingId,
-    status,
-    details: status.split("-").join(" "),
-    createdAt: new Date().toISOString(),
-  };
-  const result = await trackingCollection.insertOne(logInfo);
-  return result;
-};
-
 const uri = process.env.MONGOURL;
 
 const client = new MongoClient(uri, {
@@ -90,6 +78,18 @@ async function run() {
     const userCollection = zapShiftDB.collection("users");
     const riderCollection = zapShiftDB.collection("riders");
     const trackingCollection = zapShiftDB.collection("trackings");
+
+    // tracking logs func
+    const trackingLog = async (trackingId, status) => {
+      const logInfo = {
+        trackingId,
+        status,
+        details: status.split("-").join(" "),
+        createdAt: new Date().toISOString(),
+      };
+      const result = await trackingCollection.insertOne(logInfo);
+      return result;
+    };
 
     // middleware for check user is admin or not
     const verifyAdminRole = async (req, res, next) => {
@@ -175,14 +175,22 @@ async function run() {
 
     //? Rider related Apis
     app.get("/riders", async (req, res) => {
-      const { limit = 0, skip = 0 } = req.query;
-      // console.log(limit, skip);
+      const { limit = 0, skip = 0, search = "" } = req.query;
+      // console.log(limit, skip, search);
       const query = {};
       const { status, workStatus, district } = req.query;
 
       if (status) {
         query.status = status;
       }
+
+      if (search) {
+        query.$or = [
+          { name: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } },
+        ];
+      }
+
       if (workStatus) {
         query.workStatus = workStatus;
       }
@@ -263,6 +271,22 @@ async function run() {
         return res.json({ message: "Rider is exits already!" });
       }
       const result = await riderCollection.insertOne(rider);
+
+      // Create notification for admin
+      await createNotification({
+        type: "rider-application",
+        title: "New Rider Application",
+        message: `${rider.name} applied to become a rider`,
+        forRole: "admin",
+        relatedId: result.insertedId.toString(),
+        metadata: {
+          riderName: rider.name,
+          riderEmail: rider.email,
+          riderPhone: rider.phone,
+          riderDistrict: rider.riderDistrict,
+        },
+      });
+
       res.status(201).json(result);
     });
 
@@ -367,8 +391,26 @@ async function run() {
       const newParcel = req.body;
       const trackingId = generateTrackingId();
       newParcel.trackingId = trackingId;
+      newParcel.createdAt = new Date().toISOString();
+
       const result = await parcelsCollection.insertOne(newParcel);
       trackingLog(trackingId, "parcel-created");
+
+      // Create notification for admin
+      await createNotification({
+        type: "new-order",
+        title: "New Parcel Booked",
+        message: `${newParcel.senderName} booked a new parcel to ${newParcel.receiverDistrict}`,
+        forRole: "admin",
+        relatedId: result.insertedId.toString(),
+        trackingId: trackingId,
+        metadata: {
+          senderName: newParcel.senderName,
+          senderEmail: newParcel.senderEmail,
+          parcelName: newParcel.parcelName,
+        },
+      });
+
       res.status(201).json(result);
     });
 
@@ -395,6 +437,30 @@ async function run() {
       );
       res.json({ parcelInfo: result, riderInfo: riderResult });
     });
+
+    // update delivery status
+    // app.patch(
+    //   "/parcels/:id/deliveryStatus",
+    //   verifyFBToken,
+    //   verifyRiderRole,
+    //   async (req, res) => {
+    //     const { deliveryStatus, email, trackingId } = req.body;
+    //     const query = { _id: new ObjectId(req.params.id) };
+    //     const updateDoc = { $set: { deliveryStatus } };
+    //     if (
+    //       deliveryStatus === "delivered" ||
+    //       deliveryStatus === "parcel-paid"
+    //     ) {
+    //       await riderCollection.updateOne(
+    //         { email },
+    //         { $set: { workStatus: "available" } }
+    //       );
+    //     }
+    //     const result = await parcelsCollection.updateOne(query, updateDoc);
+    //     trackingLog(trackingId, deliveryStatus);
+    //     res.json(result);
+    //   }
+    // );
 
     app.patch(
       "/parcels/:id/deliveryStatus",
@@ -522,6 +588,24 @@ async function run() {
 
         const paymentResult = await paymentCollection.insertOne(payment);
         trackingLog(session.metadata.trackingId, "parcel-paid");
+
+        // Create notification for admin
+        await createNotification({
+          type: "payment-received",
+          title: "Payment Received",
+          message: `Payment of ৳${session.amount_total / 100} received for ${
+            session.metadata.parcelName
+          }`,
+          forRole: "admin",
+          relatedId: session.metadata.parcelId,
+          trackingId: session.metadata.trackingId,
+          metadata: {
+            amount: session.amount_total / 100,
+            customerEmail: session.customer_email,
+            parcelName: session.metadata.parcelName,
+          },
+        });
+
         return res.json({
           success: true,
           modifyParcel: result,
@@ -1054,184 +1138,12 @@ async function run() {
     // ============================================
 
     // Update the POST /parcels route to create notification
-    app.post("/parcels", async (req, res) => {
-      const newParcel = req.body;
-      const trackingId = generateTrackingId();
-      newParcel.trackingId = trackingId;
-      newParcel.createdAt = new Date().toISOString();
-
-      const result = await parcelsCollection.insertOne(newParcel);
-      trackingLog(trackingId, "parcel-created");
-
-      // Create notification for admin
-      await createNotification({
-        type: "new-order",
-        title: "New Parcel Booked",
-        message: `${newParcel.senderName} booked a new parcel to ${newParcel.receiverDistrict}`,
-        forRole: "admin",
-        relatedId: result.insertedId.toString(),
-        trackingId: trackingId,
-        metadata: {
-          senderName: newParcel.senderName,
-          senderEmail: newParcel.senderEmail,
-          parcelName: newParcel.parcelName,
-        },
-      });
-
-      res.status(201).json(result);
-    });
 
     // Update POST /riders to create notification
-    app.post("/riders", async (req, res) => {
-      const rider = req.body;
-      rider.createdAt = new Date().toISOString();
-      rider.status = "pending";
-      const email = rider.email;
-      const query = { email };
-      const isExitsRider = await riderCollection.findOne(query);
-      if (isExitsRider) {
-        return res.json({ message: "Rider is exits already!" });
-      }
-      const result = await riderCollection.insertOne(rider);
-
-      // Create notification for admin
-      await createNotification({
-        type: "rider-application",
-        title: "New Rider Application",
-        message: `${rider.name} applied to become a rider`,
-        forRole: "admin",
-        relatedId: result.insertedId.toString(),
-        metadata: {
-          riderName: rider.name,
-          riderEmail: rider.email,
-          riderPhone: rider.phone,
-          riderDistrict: rider.riderDistrict,
-        },
-      });
-
-      res.status(201).json(result);
-    });
 
     // Update payment-success to create notification
-    app.patch("/payment-success", async (req, res) => {
-      const sessionId = req.query.session_id;
-      const session = await stripe.checkout.sessions.retrieve(sessionId);
-
-      const query = { transactionId: session.payment_intent };
-      const isExits = await paymentCollection.findOne(query);
-      if (isExits) {
-        return res.send({
-          message: "payment already exits",
-          transactionId: session.payment_intent,
-          trackingId: isExits.trackingId,
-          amount: session.amount_total / 100,
-          paidAt: new Date().toISOString(),
-        });
-      }
-
-      if (session.payment_status === "paid") {
-        const id = session.metadata.parcelId;
-        const query = { _id: new ObjectId(id) };
-        const update = {
-          $set: {
-            paymentStatus: "paid",
-            trackingId: session.metadata.trackingId,
-            deliveryStatus: "parcel-paid",
-          },
-        };
-        const result = await parcelsCollection.updateOne(query, update);
-
-        const payment = {
-          amount: session.amount_total / 100,
-          currency: session.currency,
-          customarEmail: session.customer_email,
-          parcelId: session.metadata.parcelId,
-          parcelName: session.metadata.parcelName,
-          paymentStatus: session.payment_status,
-          transactionId: session.payment_intent,
-          paidAt: new Date().toISOString(),
-          trackingId: session.metadata.trackingId,
-        };
-
-        const paymentResult = await paymentCollection.insertOne(payment);
-        trackingLog(session.metadata.trackingId, "parcel-paid");
-
-        // Create notification for admin
-        await createNotification({
-          type: "payment-received",
-          title: "Payment Received",
-          message: `Payment of ৳${session.amount_total / 100} received for ${
-            session.metadata.parcelName
-          }`,
-          forRole: "admin",
-          relatedId: session.metadata.parcelId,
-          trackingId: session.metadata.trackingId,
-          metadata: {
-            amount: session.amount_total / 100,
-            customerEmail: session.customer_email,
-            parcelName: session.metadata.parcelName,
-          },
-        });
-
-        return res.json({
-          success: true,
-          modifyParcel: result,
-          trackingId: session.metadata.trackingId,
-          transactionId: session.payment_intent,
-          amount: session.amount_total / 100,
-          paymentInfo: paymentResult,
-          paidAt: new Date().toISOString(),
-        });
-      }
-
-      return res.json({ success: false });
-    });
 
     // Update delivery status to create notification
-    app.patch(
-      "/parcels/:id/deliveryStatus",
-      verifyFBToken,
-      verifyRiderRole,
-      async (req, res) => {
-        const { deliveryStatus, email, trackingId } = req.body;
-        const query = { _id: new ObjectId(req.params.id) };
-        const updateDoc = { $set: { deliveryStatus } };
-
-        if (
-          deliveryStatus === "delivered" ||
-          deliveryStatus === "parcel-paid"
-        ) {
-          await riderCollection.updateOne(
-            { email },
-            { $set: { workStatus: "available" } }
-          );
-        }
-
-        const result = await parcelsCollection.updateOne(query, updateDoc);
-        trackingLog(trackingId, deliveryStatus);
-
-        // Create notification for admin on important status changes
-        if (deliveryStatus === "delivered") {
-          const parcel = await parcelsCollection.findOne(query);
-          await createNotification({
-            type: "delivery-completed",
-            title: "Delivery Completed",
-            message: `Parcel ${trackingId} delivered successfully by ${
-              parcel?.riderName || "rider"
-            }`,
-            forRole: "admin",
-            relatedId: req.params.id,
-            trackingId: trackingId,
-            metadata: {
-              riderName: parcel?.riderName,
-              riderEmail: email,
-            },
-          });
-        }
-
-        res.json(result);
-      }
-    );
   } finally {
     // Ensures that the client will close when you finish/error
   }
