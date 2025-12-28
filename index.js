@@ -174,7 +174,7 @@ async function run() {
     );
 
     //? Rider related Apis
-    app.get("/riders", async (req, res) => {
+    app.get("/riders", verifyFBToken, verifyAdminRole, async (req, res) => {
       const { limit = 0, skip = 0, search = "" } = req.query;
       // console.log(limit, skip, search);
       const query = {};
@@ -253,13 +253,14 @@ async function run() {
           },
         },
 
-        // { $sort: { "_id.date": 1 } },
+        { $sort: { "_id.date": -1 } },
       ];
 
       const result = await parcelsCollection.aggregate(pipeline).toArray();
       res.json(result);
     });
 
+    // post rider application
     app.post("/riders", async (req, res) => {
       const rider = req.body;
       rider.createdAt = new Date().toISOString();
